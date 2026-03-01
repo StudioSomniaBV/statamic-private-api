@@ -1,6 +1,5 @@
 {
     "name": "tv2regionerne/statamic-private-api",
-    "version": "1.17.1",
     "autoload": {
         "psr-4": {
             "Tv2regionerne\\StatamicPrivateApi\\": "src"
