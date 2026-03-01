@@ -7,7 +7,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Validation\ValidationException;
 use Statamic\Facades;
-use Statamic\Http\Controllers\API\ApiController;
 use Statamic\Http\Controllers\CP\Collections\EntriesController as CpController;
 use Statamic\Http\Resources\API\EntryResource;
 use Tv2regionerne\StatamicPrivateApi\Traits\VerifiesPrivateAPI;
