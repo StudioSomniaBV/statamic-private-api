@@ -160,7 +160,7 @@ class AssetsController extends ApiController
             abort(404);
         }
 
-        $this->authorize('delete', [AssetContract::class, $container]);
+        $this->authorize('delete', $asset);
 
         $asset->delete();
 
