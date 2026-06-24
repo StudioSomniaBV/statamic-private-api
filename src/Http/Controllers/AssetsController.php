@@ -12,7 +12,6 @@ use Statamic\Contracts\Assets\Asset as AssetContract;
 use Statamic\Facades;
 use Statamic\Facades\Asset;
 use Statamic\Facades\Blink;
-use Statamic\Http\Controllers\API\ApiController;
 use Statamic\Http\Controllers\CP\Assets\AssetsController as CpController;
 use Symfony\Component\Mime\MimeTypes;
 use Tv2regionerne\StatamicPrivateApi\Http\Resources\AssetResource;
