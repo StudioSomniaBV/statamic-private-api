@@ -81,7 +81,7 @@ class AssetsController extends ApiController
 
             // Check mimetype of the file and detect extension for the file
             $mimetype = mime_content_type($tmpPath);
-            $mimetypes = new MimeTypes();
+            $mimetypes = new MimeTypes;
             $extension = collect($mimetypes->getExtensions($mimetypes->guessMimeType($tmpPath)))->first();
 
             // Create filename if not set through request
