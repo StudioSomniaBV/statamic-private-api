@@ -3,9 +3,7 @@
 namespace Tv2regionerne\StatamicPrivateApi\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Statamic\Facades\Site;
-use Statamic\Facades\Taxonomy;
-use Statamic\Facades\Term;
+use Statamic\Facades;
 use Statamic\Http\Resources\API\TermResource;
 use Tv2regionerne\StatamicPrivateApi\Traits\VerifiesPrivateAPI;
 
@@ -19,10 +17,8 @@ use Tv2regionerne\StatamicPrivateApi\Traits\VerifiesPrivateAPI;
  *    null check to make.
  *  - makeLocalization() does not exist on Term or LocalizedTerm.
  *  - All localizations live in one file, keyed per locale in dataForLocale().
- *  - LocalizedTerm::delete() deletes the whole term file, not just that
- *    locale. destroy() below therefore clears the locale instead.
  */
-class TermLocalizationsController
+class TermLocalizationsController extends ApiController
 {
     use VerifiesPrivateAPI;
 
@@ -51,23 +47,23 @@ class TermLocalizationsController
     public function show($taxonomy, $slug, $site)
     {
         [$taxonomy, $term] = $this->resolve($taxonomy, $slug);
-        $site = $this->siteOrFail($site, $taxonomy);
+        $site = $this->siteFromHandle($site, $taxonomy);
 
         return app(TermResource::class)::make($term->in($site->handle()));
     }
 
     /**
-     * POST /taxonomies/{taxonomy}/terms/{slug}/localizations
+     * PATCH /taxonomies/{taxonomy}/terms/{slug}/localizations/{site}
      *
-     * Body: { "site": "pl", "values": {...}, "slug": "..." }
+     * Body: { "values": {...}, "slug": "..." }
      *
      * merge() writes through to dataForLocale($site), so only that locale is
      * touched. Keys not present in `values` keep falling back to the origin.
      */
-    public function store(Request $request, $taxonomy, $slug)
+    public function update(Request $request, $taxonomy, $slug, $site)
     {
         [$taxonomy, $term] = $this->resolve($taxonomy, $slug);
-        $site = $this->siteOrFail($request->input('site'), $taxonomy);
+        $site = $this->siteFromHandle($site, $taxonomy);
 
         $localized = $term->in($site->handle());
 
@@ -81,69 +77,33 @@ class TermLocalizationsController
 
         $localized->save();
 
-        return app(TermResource::class)::make(
-            $term->fresh()->in($site->handle())
-        );
+        return app(TermResource::class)::make($localized);
     }
 
-    /**
-     * DELETE /taxonomies/{taxonomy}/terms/{slug}/localizations/{site}
-     *
-     * Clears the localized data for one site. Does NOT delete the term file —
-     * LocalizedTerm::delete() would remove every language at once.
-     */
-    public function destroy($taxonomy, $slug, $site)
-    {
-        [$taxonomy, $term] = $this->resolve($taxonomy, $slug);
-        $site = $this->siteOrFail($site, $taxonomy);
-
-        abort_if(
-            $site->handle() === $term->defaultLocale(),
-            422,
-            'Refusing to clear the origin localization.'
-        );
-
-        $term->dataForLocale($site->handle(), collect());
-        $term->save();
-
-        return response('', 204);
-    }
-
-    /**
-     * Resolve the taxonomy + term.
-     *
-     * Accepts both the bare slug (hamburg) and the composite id from the index
-     * endpoint (cities::hamburg), so clients can pass through whatever the list
-     * gave them.
-     */
     private function resolve($taxonomyHandle, $slug): array
     {
-        $taxonomy = Taxonomy::find($taxonomyHandle);
+        $taxonomy = Facades\Taxonomy::find($taxonomyHandle);
 
         abort_unless($taxonomy, 404);
-        abort_unless($this->resourcesAllowed('taxonomies', $taxonomy->handle()), 404);
+        abort_if(! $this->resourcesAllowed('taxonomies', $taxonomy->handle()), 404);
 
-        if (str_contains($slug, '::')) {
-            $slug = explode('::', $slug, 2)[1];
-        }
-
-        $term = Term::find($taxonomy->handle().'::'.$slug);
+        $term = Facades\Term::find($taxonomy->handle().'::'.$slug);
 
         abort_unless($term, 404);
 
         return [$taxonomy, $term];
     }
 
-    private function siteOrFail($handle, $taxonomy)
+    private function siteFromHandle($handle, $taxonomy)
     {
         abort_unless($handle, 422, 'A `site` handle is required. See GET /sites.');
 
-        $site = Site::get($handle);
+        $site = Facades\Site::get($handle);
 
         abort_unless($site, 422, "Unknown site handle: {$handle}");
 
-        abort_unless(
-            $taxonomy->sites()->contains($site->handle()),
+        abort_if(
+            ! $taxonomy->sites()->contains($site->handle()),
             422,
             "Taxonomy {$taxonomy->handle()} is not enabled for site {$site->handle()}."
         );

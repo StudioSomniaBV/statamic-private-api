@@ -3,9 +3,7 @@
 namespace Tv2regionerne\StatamicPrivateApi\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Statamic\Facades\Collection;
-use Statamic\Facades\Entry;
-use Statamic\Facades\Site;
+use Statamic\Facades;
 use Statamic\Http\Resources\API\EntryResource;
 use Tv2regionerne\StatamicPrivateApi\Traits\VerifiesPrivateAPI;
 
@@ -15,7 +13,7 @@ use Tv2regionerne\StatamicPrivateApi\Traits\VerifiesPrivateAPI;
  * Entry localizations are separate entries linked to an origin via origin().
  * makeLocalization() creates one when it doesn't exist yet.
  */
-class EntryLocalizationsController
+class EntryLocalizationsController extends ApiController
 {
     use VerifiesPrivateAPI;
 
@@ -28,6 +26,8 @@ class EntryLocalizationsController
     public function index($collection, $entry)
     {
         $root = $this->root($collection, $entry);
+
+        $this->authorize('view', $root);
 
         $sites = collect([$root])->merge($root->descendants())
             ->map(fn ($e) => [
@@ -47,28 +47,32 @@ class EntryLocalizationsController
     public function show($collection, $entry, $site)
     {
         $root = $this->root($collection, $entry);
-        $site = $this->siteOrFail($site);
+        $site = $this->siteFromHandle($site);
 
         $localized = $root->in($site->handle());
 
         abort_unless($localized, 404, 'No localization for that site.');
 
+        $this->authorize('view', $localized);
+
         return app(EntryResource::class)::make($localized);
     }
 
     /**
-     * POST /collections/{collection}/entries/{entry}/localizations
+     * PATCH /collections/{collection}/entries/{entry}/localizations/{site}
      *
-     * Body: { "site": "pl", "values": {...}, "published": true, "slug": "..." }
+     * Body: { "values": {...}, "published": true, "slug": "..." }
      *
-     * Creates the localization when it doesn't exist, otherwise merges into it.
-     * Only the keys present in `values` are touched; everything else keeps
-     * falling back to the origin.
+     * Creates the localization when it doesn't exist yet, otherwise merges
+     * into it. Only the keys present in `values` are touched; anything else
+     * keeps falling back to the origin.
      */
-    public function store(Request $request, $collection, $entry)
+    public function update(Request $request, $collection, $entry, $site)
     {
         $root = $this->root($collection, $entry);
-        $site = $this->siteOrFail($request->input('site'));
+        $site = $this->siteFromHandle($site);
+
+        $this->authorize('edit', $root);
 
         $localized = $root->in($site->handle()) ?? $root->makeLocalization($site);
 
@@ -90,39 +94,16 @@ class EntryLocalizationsController
     }
 
     /**
-     * DELETE /collections/{collection}/entries/{entry}/localizations/{site}
-     */
-    public function destroy($collection, $entry, $site)
-    {
-        $root = $this->root($collection, $entry);
-        $site = $this->siteOrFail($site);
-
-        abort_if(
-            $site->handle() === $root->locale(),
-            422,
-            'Refusing to delete the origin localization.'
-        );
-
-        $localized = $root->in($site->handle());
-
-        abort_unless($localized, 404, 'No localization for that site.');
-
-        $localized->delete();
-
-        return response('', 204);
-    }
-
-    /**
      * Resolve the collection + entry, and return the origin entry.
      */
     private function root($collectionHandle, $entryId)
     {
-        $collection = Collection::find($collectionHandle);
+        $collection = Facades\Collection::find($collectionHandle);
 
         abort_unless($collection, 404);
-        abort_unless($this->resourcesAllowed('collections', $collection->handle()), 404);
+        abort_if(! $this->resourcesAllowed('collections', $collection->handle()), 404);
 
-        $entry = Entry::find($entryId);
+        $entry = Facades\Entry::find($entryId);
 
         abort_unless($entry, 404);
         abort_if($entry->collectionHandle() !== $collection->handle(), 404);
@@ -130,11 +111,11 @@ class EntryLocalizationsController
         return $entry->origin() ?? $entry;
     }
 
-    private function siteOrFail($handle)
+    private function siteFromHandle($handle)
     {
         abort_unless($handle, 422, 'A `site` handle is required. See GET /sites.');
 
-        $site = Site::get($handle);
+        $site = Facades\Site::get($handle);
 
         abort_unless($site, 422, "Unknown site handle: {$handle}");
 
