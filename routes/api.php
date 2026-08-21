@@ -15,6 +15,9 @@ Route::prefix(config('private-api.route'))
                     return $request->user();
                 });
 
+                // sites
+                Route::get('/sites', [Controllers\SitesController::class, 'index'])->name('sites.index');
+
                 // assets
                 Route::prefix('/asset-containers')
                     ->name('asset-containers.')
@@ -63,6 +66,15 @@ Route::prefix(config('private-api.route'))
                                         Route::post('/', [Controllers\CollectionEntriesController::class, 'store'])->name('store');
                                         Route::patch('{entry}', [Controllers\CollectionEntriesController::class, 'update'])->name('update');
                                         Route::delete('{entry}', [Controllers\CollectionEntriesController::class, 'destroy'])->name('destroy');
+
+                                        // entry localizations
+                                        Route::prefix('{entry}/localizations')
+                                            ->name('localizations.')
+                                            ->group(function () {
+                                                Route::get('/', [Controllers\EntryLocalizationsController::class, 'index'])->name('index');
+                                                Route::get('{site}', [Controllers\EntryLocalizationsController::class, 'show'])->name('show');
+                                                Route::patch('{site}', [Controllers\EntryLocalizationsController::class, 'update'])->name('update');
+                                            });
                                     });
 
                                 // collection tree
@@ -166,6 +178,15 @@ Route::prefix(config('private-api.route'))
                                         Route::post('/', [Controllers\TaxonomyTermsController::class, 'store'])->name('store');
                                         Route::patch('{term}', [Controllers\TaxonomyTermsController::class, 'update'])->name('update');
                                         Route::delete('{term}', [Controllers\TaxonomyTermsController::class, 'destroy'])->name('destroy');
+
+                                        // term localizations
+                                        Route::prefix('{term}/localizations')
+                                            ->name('localizations.')
+                                            ->group(function () {
+                                                Route::get('/', [Controllers\TermLocalizationsController::class, 'index'])->name('index');
+                                                Route::get('{site}', [Controllers\TermLocalizationsController::class, 'show'])->name('show');
+                                                Route::patch('{site}', [Controllers\TermLocalizationsController::class, 'update'])->name('update');
+                                            });
                                     });
                             });
                     });
