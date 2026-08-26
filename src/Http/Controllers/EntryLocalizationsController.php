@@ -3,7 +3,11 @@
 namespace Tv2regionerne\StatamicPrivateApi\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Validation\ValidationException;
+use Statamic\Contracts\Entries\Entry as EntryContract;
 use Statamic\Facades;
+use Statamic\Http\Controllers\CP\Collections\EntriesController as CpController;
 use Statamic\Http\Resources\API\EntryResource;
 use Tv2regionerne\StatamicPrivateApi\Traits\VerifiesPrivateAPI;
 
@@ -12,6 +16,9 @@ use Tv2regionerne\StatamicPrivateApi\Traits\VerifiesPrivateAPI;
  *
  * Entry localizations are separate entries linked to an origin via origin().
  * makeLocalization() creates one when it doesn't exist yet.
+ *
+ * Writes are delegated to the CP controller so blueprint validation,
+ * processing and authorization all apply, matching CollectionEntriesController.
  */
 class EntryLocalizationsController extends ApiController
 {
@@ -25,7 +32,8 @@ class EntryLocalizationsController extends ApiController
      */
     public function index($collection, $entry)
     {
-        $root = $this->root($collection, $entry);
+        $collection = $this->collectionFromHandle($collection);
+        $root = $this->rootEntry($entry, $collection);
 
         $this->authorize('view', $root);
 
@@ -46,8 +54,9 @@ class EntryLocalizationsController extends ApiController
      */
     public function show($collection, $entry, $site)
     {
-        $root = $this->root($collection, $entry);
-        $site = $this->siteFromHandle($site);
+        $collection = $this->collectionFromHandle($collection);
+        $root = $this->rootEntry($entry, $collection);
+        $site = $this->siteFromHandle($site, $collection);
 
         $localized = $root->in($site->handle());
 
@@ -61,63 +70,96 @@ class EntryLocalizationsController extends ApiController
     /**
      * PATCH /collections/{collection}/entries/{entry}/localizations/{site}
      *
-     * Body: { "values": {...}, "published": true, "slug": "..." }
-     *
-     * Creates the localization when it doesn't exist yet, otherwise merges
-     * into it. Only the keys present in `values` are touched; anything else
-     * keeps falling back to the origin.
+     * Creates the localization when it doesn't exist yet. The payload is
+     * merged over the current values before it goes through the CP controller,
+     * so a partial payload only changes the keys it contains.
      */
     public function update(Request $request, $collection, $entry, $site)
     {
-        $root = $this->root($collection, $entry);
-        $site = $this->siteFromHandle($site);
+        $collection = $this->collectionFromHandle($collection);
+        $root = $this->rootEntry($entry, $collection);
+        $site = $this->siteFromHandle($site, $collection);
 
-        $this->authorize('edit', $root);
+        if (! $localized = $root->in($site->handle())) {
+            $this->authorize('create', [EntryContract::class, $collection, $site]);
 
-        $localized = $root->in($site->handle()) ?? $root->makeLocalization($site);
-
-        if ($values = (array) $request->input('values', [])) {
-            $localized->merge($values);
+            $localized = $root->makeLocalization($site);
+            $localized->save();
         }
 
-        if ($request->has('published')) {
-            $localized->published($request->boolean('published'));
+        $payloadKeys = collect($request->except(['id', '_localized']))->keys();
+
+        $request->headers->add(['accept' => 'application/json']);
+
+        $originalData = collect(
+            (new CpController($request))->edit($request, $collection, $localized)->get('values')
+        )->filter();
+
+        $request->replace($originalData->merge($request->all())->all());
+
+        // The CP controller replaces a localization's data with only the keys
+        // listed in `_localized`, so it must contain the existing overrides for
+        // this site plus the keys in the payload — otherwise fields would be
+        // reset to the origin value (and dated collections would error).
+        $request->merge(['_localized' => $localized->data()->keys()
+            ->merge($payloadKeys)
+            ->unique()->values()->all()]);
+
+        try {
+            $response = (new CpController($request))->update($request, $collection, $localized);
+        } catch (ValidationException $e) {
+            return $this->returnValidationErrors($e);
         }
 
-        if ($request->filled('slug')) {
-            $localized->slug($request->input('slug'));
+        if (! $id = Arr::get($response, 'data.id')) {
+            abort(403);
         }
 
-        $localized->save();
+        return app(EntryResource::class)::make(Facades\Entry::find($id));
+    }
 
-        return app(EntryResource::class)::make($localized->fresh());
+    private function collectionFromHandle($collection)
+    {
+        $collection = is_string($collection) ? Facades\Collection::find($collection) : $collection;
+
+        if (! $collection) {
+            abort(404);
+        }
+
+        abort_if(! $this->resourcesAllowed('collections', $collection->handle()), 404);
+
+        return $collection;
     }
 
     /**
-     * Resolve the collection + entry, and return the origin entry.
+     * Resolve the entry and return its origin, so any localization id works.
      */
-    private function root($collectionHandle, $entryId)
+    private function rootEntry($entry, $collection)
     {
-        $collection = Facades\Collection::find($collectionHandle);
+        $entry = is_string($entry) ? Facades\Entry::find($entry) : $entry;
 
-        abort_unless($collection, 404);
-        abort_if(! $this->resourcesAllowed('collections', $collection->handle()), 404);
-
-        $entry = Facades\Entry::find($entryId);
-
-        abort_unless($entry, 404);
-        abort_if($entry->collectionHandle() !== $collection->handle(), 404);
+        if (! $entry || $entry->collection()->id() !== $collection->id()) {
+            abort(404);
+        }
 
         return $entry->origin() ?? $entry;
     }
 
-    private function siteFromHandle($handle)
+    /**
+     * A site can exist globally while a collection is only enabled for a
+     * subset of sites, so check against the collection rather than Site::all().
+     */
+    private function siteFromHandle($handle, $collection)
     {
-        abort_unless($handle, 422, 'A `site` handle is required. See GET /sites.');
-
         $site = Facades\Site::get($handle);
 
         abort_unless($site, 422, "Unknown site handle: {$handle}");
+
+        abort_if(
+            ! $collection->sites()->contains($site->handle()),
+            422,
+            "Collection {$collection->handle()} is not enabled for site {$site->handle()}."
+        );
 
         return $site;
     }

@@ -3,20 +3,23 @@
 namespace Tv2regionerne\StatamicPrivateApi\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Statamic\Facades;
+use Statamic\Http\Controllers\CP\Taxonomies\TermsController as CpController;
 use Statamic\Http\Resources\API\TermResource;
 use Tv2regionerne\StatamicPrivateApi\Traits\VerifiesPrivateAPI;
 
 /**
  * Read and write a single localization of a taxonomy term.
  *
- * Terms behave differently from entries:
+ * Terms behave differently from entries: Term::in($site) always returns a
+ * LocalizedTerm, even for a site that has no data yet, and all localizations
+ * live in one file keyed per locale. There is no makeLocalization() step.
  *
- *  - Term::in($site) always returns a LocalizedTerm, even for a site that has
- *    no data yet. It never returns null, so there is no "create" step and no
- *    null check to make.
- *  - makeLocalization() does not exist on Term or LocalizedTerm.
- *  - All localizations live in one file, keyed per locale in dataForLocale().
+ * Writes are delegated to the CP controller, which already accepts the site as
+ * a parameter, so blueprint validation, processing and authorization all apply.
+ * This mirrors TaxonomyTermsController, which passes Site::current() where this
+ * controller passes the requested site.
  */
 class TermLocalizationsController extends ApiController
 {
@@ -55,10 +58,9 @@ class TermLocalizationsController extends ApiController
     /**
      * PATCH /taxonomies/{taxonomy}/terms/{slug}/localizations/{site}
      *
-     * Body: { "values": {...}, "slug": "..." }
-     *
-     * merge() writes through to dataForLocale($site), so only that locale is
-     * touched. Keys not present in `values` keep falling back to the origin.
+     * The payload is merged over the current values for that site before it
+     * goes through the CP controller, so a partial payload only changes the
+     * keys it contains.
      */
     public function update(Request $request, $taxonomy, $slug, $site)
     {
@@ -66,38 +68,65 @@ class TermLocalizationsController extends ApiController
         $site = $this->siteFromHandle($site, $taxonomy);
 
         $localized = $term->in($site->handle());
+        $payloadKeys = collect($request->except(['id', '_localized']))->keys();
 
-        if ($values = (array) $request->input('values', [])) {
-            $localized->merge($values);
+        try {
+            $data = json_decode($this->show($taxonomy->handle(), $slug, $site->handle())->toJson(), true);
+
+            $request->merge(collect($data)->merge($request->all())->all());
+
+            // The CP controller sets slug and published unconditionally from
+            // the request, so fall back to the current values when the payload
+            // doesn't provide them.
+            if (! $request->filled('slug')) {
+                $request->merge(['slug' => $localized->slug()]);
+            }
+
+            if (! $request->has('published')) {
+                $request->merge(['published' => $localized->published()]);
+            }
+
+            // The CP controller replaces a localization's data with only the
+            // keys listed in `_localized`, so it must contain the existing
+            // overrides for this site plus the keys in the payload — otherwise
+            // fields would be reset to the origin value.
+            $request->merge(['_localized' => $term->dataForLocale($site->handle())->keys()
+                ->merge($payloadKeys)
+                ->unique()->values()->all()]);
+
+            (new CpController($request))->update($request, $taxonomy, $term, $site);
+
+            return app(TermResource::class)::make($term->in($site->handle()));
+        } catch (ValidationException $e) {
+            return $this->returnValidationErrors($e);
         }
-
-        if ($request->filled('slug')) {
-            $localized->slug($request->input('slug'));
-        }
-
-        $localized->save();
-
-        return app(TermResource::class)::make($localized);
     }
 
     private function resolve($taxonomyHandle, $slug): array
     {
         $taxonomy = Facades\Taxonomy::find($taxonomyHandle);
 
-        abort_unless($taxonomy, 404);
+        if (! $taxonomy) {
+            abort(404);
+        }
+
         abort_if(! $this->resourcesAllowed('taxonomies', $taxonomy->handle()), 404);
 
         $term = Facades\Term::find($taxonomy->handle().'::'.$slug);
 
-        abort_unless($term, 404);
+        if (! $term || $term->taxonomy()->handle() !== $taxonomy->handle()) {
+            abort(404);
+        }
 
         return [$taxonomy, $term];
     }
 
+    /**
+     * A site can exist globally while a taxonomy is only enabled for a subset
+     * of sites, so check against the taxonomy rather than Site::all().
+     */
     private function siteFromHandle($handle, $taxonomy)
     {
-        abort_unless($handle, 422, 'A `site` handle is required. See GET /sites.');
-
         $site = Facades\Site::get($handle);
 
         abort_unless($site, 422, "Unknown site handle: {$handle}");
