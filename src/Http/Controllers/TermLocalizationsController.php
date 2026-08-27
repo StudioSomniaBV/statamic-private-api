@@ -80,9 +80,12 @@ class TermLocalizationsController extends ApiController
             // differs from the stored format (e.g. seo-pro source fields).
             $request->headers->add(['accept' => 'application/json']);
 
-            $originalData = collect(
-                (new CpController($request))->edit($request, $taxonomy, $localized)->get('values')
-            )->filter();
+            // Unlike the entries CP edit (which returns a Collection), the
+            // terms CP edit returns a plain array when JSON is requested, so
+            // read `values` in a shape-agnostic way.
+            $editData = (new CpController($request))->edit($request, $taxonomy, $localized);
+
+            $originalData = collect(data_get($editData, 'values', []))->filter();
 
             $request->merge($originalData->merge($request->all())->all());
 
