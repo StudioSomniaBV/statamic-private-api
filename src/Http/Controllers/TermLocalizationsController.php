@@ -73,9 +73,18 @@ class TermLocalizationsController extends ApiController
         $payloadKeys = collect($request->except(['id', '_localized']))->keys();
 
         try {
-            $data = json_decode($this->show($taxonomy->handle(), $slug, $site->handle())->toJson(), true);
+            // Seed the request with the current publish-form values from the
+            // CP edit endpoint (raw field format), the same way
+            // CollectionEntriesController does for entries. Seeding from the
+            // API resource breaks validation for fields whose augmented value
+            // differs from the stored format (e.g. seo-pro source fields).
+            $request->headers->add(['accept' => 'application/json']);
 
-            $request->merge(collect($data)->merge($request->all())->all());
+            $originalData = collect(
+                (new CpController($request))->edit($request, $taxonomy, $localized)->get('values')
+            )->filter();
+
+            $request->merge($originalData->merge($request->all())->all());
 
             // The CP controller sets slug and published unconditionally from
             // the request, so fall back to the current values when the payload
