@@ -35,10 +35,12 @@ class TermLocalizationsController extends ApiController
     {
         [$taxonomy, $term] = $this->resolve($taxonomy, $slug);
 
+        // Term::find() returns a LocalizedTerm; dataForLocale() and
+        // defaultLocale() live on the underlying Term, so go through term().
         $sites = $taxonomy->sites()->map(fn ($handle) => [
             'site' => $handle,
-            'has_content' => $term->dataForLocale($handle)->isNotEmpty(),
-            'is_origin' => $handle === $term->defaultLocale(),
+            'has_content' => $term->term()->dataForLocale($handle)->isNotEmpty(),
+            'is_origin' => $handle === $term->term()->defaultLocale(),
         ])->values();
 
         return response()->json(['data' => $sites]);
@@ -90,7 +92,7 @@ class TermLocalizationsController extends ApiController
             // keys listed in `_localized`, so it must contain the existing
             // overrides for this site plus the keys in the payload — otherwise
             // fields would be reset to the origin value.
-            $request->merge(['_localized' => $term->dataForLocale($site->handle())->keys()
+            $request->merge(['_localized' => $term->term()->dataForLocale($site->handle())->keys()
                 ->merge($payloadKeys)
                 ->unique()->values()->all()]);
 
